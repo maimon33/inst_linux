@@ -10,10 +10,20 @@ from botocore.exceptions import ClientError
 
 
 session_id = uuid.uuid4().hex
+MY_IP = urllib.urlopen('http://whatismyip.org').read()
+
+
+# Keypair prepiration
 INST_KEYPAIR = open('/tmp/{}'.format(session_id), 'w+')
 KEYPAIR_PATH = '/tmp/{}'.format(session_id)
 os.chmod(KEYPAIR_PATH, 0600)
-MY_IP = urllib.urlopen('http://whatismyip.org').read()
+
+
+# Userdata for the AWS instance
+USERDATA = """#!/bin/bash
+export TMOUT=300
+echo "* * * * * if who | wc -l | grep -q 1 ; then shutdown -h now 'Server Idle, Server termination' ; fi >/dev/null 2>&1" >> /root/mycron
+crontab /root/mycron"""
 
 
 class aws_client():
@@ -27,28 +37,22 @@ class aws_client():
         self.SECRET_KEY = SECRET_KEY
 
 
-    def aws_api(self, resource=True, aws_service='ec2'):
-        if resource:
-            return boto3.resource(aws_service,
-                                  aws_access_key_id=self.ACCESS_KEY,
-                                  aws_secret_access_key=self.SECRET_KEY,
-                                  region_name='eu-west-1')
-        else:
-            return boto3.client(aws_service,
-                                aws_access_key_id=self.ACCESS_KEY,
-                                aws_secret_access_key=self.SECRET_KEY,
-                                region_name='eu-west-1')
+    def aws_api(self, aws_service='ec2'):
+        return boto3.resource(aws_service,
+                              aws_access_key_id=self.ACCESS_KEY,
+                              aws_secret_access_key=self.SECRET_KEY,
+                              region_name='eu-west-1')
 
 
     def keypair(self):
         try:
-            keypair = self.aws_api(resource=False).create_key_pair(KeyName=session_id)
+            keypair = self.aws_api().meta.client.create_key_pair(KeyName=session_id)
             INST_KEYPAIR.write(keypair['KeyMaterial'])
             INST_KEYPAIR.close()
             return session_id
         except ClientError as e:
             if e.response['Error']['Code'] == 'InvalidKeyPair.Duplicate':
-                print "Key Exists - Skipping"
+                print "Key exists - Skipping"
                 return session_id
 
 
@@ -58,7 +62,7 @@ class aws_client():
                                         MaxCount=1,
                                         InstanceType='t2.micro',
                                         KeyName=self.keypair(),
-                                        UserData='export TMOUT=300 && if who | wc -l | grep -q 1 ; then shutdown -h 5 ; fi',
+                                        UserData=USERDATA,
                                         SecurityGroups=[self.create_security_group()],
                                         InstanceInitiatedShutdownBehavior='terminate',)[0]
         instance.wait_until_running()
@@ -67,11 +71,11 @@ class aws_client():
 
     def create_security_group(self):
         try:
-            mysg = self.aws_api().create_security_group(GroupName="INST_LINUX",Description='testme')
-            mysg.authorize_ingress(IpProtocol="tcp",CidrIp="0.0.0.0/0",FromPort=22,ToPort=22)
+            mysg = self.aws_api().create_security_group(GroupName="INST_LINUX",Description='Single serving SG')
+            mysg.authorize_ingress(IpProtocol="tcp",CidrIp='0.0.0.0/0'.format(MY_IP),FromPort=22,ToPort=22)
         except ClientError as e:
             if e.response['Error']['Code'] == 'InvalidGroup.Duplicate':
-                print "SG Exists - Skipping"
+                print "SG exists - Skipping"
                 pass
 
         return "INST_LINUX"
@@ -88,7 +92,7 @@ CLICK_CONTEXT_SETTINGS = dict(
 @click.group(context_settings=CLICK_CONTEXT_SETTINGS)
 @click.pass_context
 def _inst_linux(ctx):
-    """Client to upload files to S3 easily
+    """Get a Linux distro instance on AWS with one click
     """
     if os.environ.get('AWS_ACCESS_KEY_ID') and os.environ.get(
             'AWS_SECRET_ACCESS_KEY'):
