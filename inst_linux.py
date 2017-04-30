@@ -39,20 +39,26 @@ class aws_client():
                                 aws_secret_access_key=self.SECRET_KEY,
                                 region_name='eu-west-1')
 
-    def start_instance(self):
+
+    def keypair(self):
         try:
-            keypair = self.aws_api(resource=False).create_key_pair(KeyName='test')
+            keypair = self.aws_api(resource=False).create_key_pair(KeyName=session_id)
             INST_KEYPAIR.write(keypair['KeyMaterial'])
             INST_KEYPAIR.close()
+            return session_id
         except ClientError as e:
             if e.response['Error']['Code'] == 'InvalidKeyPair.Duplicate':
                 print "Key Exists - Skipping"
-                pass
+                return session_id
+
+
+    def start_instance(self):
         instance = self.aws_api().create_instances(ImageId='ami-a8d2d7ce',
                                         MinCount=1,
                                         MaxCount=1,
                                         InstanceType='t2.micro',
-                                        KeyName='test',
+                                        KeyName=self.keypair(),
+                                        UserData='export TMOUT=300 && if who | wc -l | grep -q 1 ; then shutdown -h 5 ; fi',
                                         SecurityGroups=[self.create_security_group()],
                                         InstanceInitiatedShutdownBehavior='terminate',)[0]
         instance.wait_until_running()
