@@ -3,13 +3,14 @@ import sys
 import uuid
 import urllib
 
-import click
 import boto3
+import click
 
 from botocore.exceptions import ClientError
 
 
 session_id = uuid.uuid4().hex
+DEFAULT_REGION = 'eu-west-1'
 MY_IP = urllib.urlopen('http://whatismyip.org').read()
 
 
@@ -21,8 +22,10 @@ os.chmod(KEYPAIR_PATH, 0600)
 
 # Userdata for the AWS instance
 USERDATA = """#!/bin/bash
-export TMOUT=300
-echo "* * * * * if who | wc -l | grep -q 1 ; then shutdown -h now 'Server Idle, Server termination' ; fi >/dev/null 2>&1" >> /root/mycron
+echo export TMOUT=300 >> /etc/environment
+echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
+chmod +x /root/inst_linux.sh
+echo "* * * * * /root/inst_linux.sh" >> /root/mycron
 crontab /root/mycron"""
 
 
@@ -37,16 +40,22 @@ class aws_client():
         self.SECRET_KEY = SECRET_KEY
 
 
-    def aws_api(self, aws_service='ec2'):
-        return boto3.resource(aws_service,
-                              aws_access_key_id=self.ACCESS_KEY,
-                              aws_secret_access_key=self.SECRET_KEY,
-                              region_name='eu-west-1')
+    def aws_api(self, resource=True, aws_service='ec2'):
+        if resource:
+            return boto3.resource(aws_service,
+                                  aws_access_key_id=self.ACCESS_KEY,
+                                  aws_secret_access_key=self.SECRET_KEY,
+                                  region_name=DEFAULT_REGION)
+        else:
+            return boto3.client(aws_service,
+                                aws_access_key_id=self.ACCESS_KEY,
+                                aws_secret_access_key=self.SECRET_KEY,
+                                region_name=DEFAULT_REGION)
 
 
     def keypair(self):
         try:
-            keypair = self.aws_api().meta.client.create_key_pair(KeyName=session_id)
+            keypair = self.aws_api(resource=False).create_key_pair(KeyName=session_id)
             INST_KEYPAIR.write(keypair['KeyMaterial'])
             INST_KEYPAIR.close()
             return session_id
@@ -58,16 +67,17 @@ class aws_client():
 
     def start_instance(self):
         instance = self.aws_api().create_instances(ImageId='ami-a8d2d7ce',
-                                        MinCount=1,
-                                        MaxCount=1,
-                                        InstanceType='t2.micro',
-                                        KeyName=self.keypair(),
-                                        UserData=USERDATA,
-                                        SecurityGroups=[self.create_security_group()],
-                                        InstanceInitiatedShutdownBehavior='terminate',)[0]
+                                                   MinCount=1,
+                                                   MaxCount=1,
+                                                   InstanceType='t2.micro',
+                                                   KeyName=self.keypair(),
+                                                   UserData=USERDATA,
+                                                   SecurityGroups=[self.create_security_group()],
+                                                   InstanceInitiatedShutdownBehavior='terminate')[0]
         instance.wait_until_running()
         instance.load()
         return instance.public_dns_name
+
 
     def create_security_group(self):
         try:
@@ -77,7 +87,6 @@ class aws_client():
             if e.response['Error']['Code'] == 'InvalidGroup.Duplicate':
                 print "SG exists - Skipping"
                 pass
-
         return "INST_LINUX"
 
 
