@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import uuid
 import urllib
 
@@ -38,6 +39,26 @@ class aws_client():
 
         SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
         self.SECRET_KEY = SECRET_KEY
+
+
+    def _set_region(self):
+        import subprocess
+        iplist = self.get_regions()
+        with open(os.devnull, "wb") as limbo:
+            for ip in iplist:
+                result=subprocess.Popen(["ping", "-c", "1", "-i", "0.1", "-n", "-W", "2", ip],
+                                        stdout=limbo, stderr=limbo).wait()
+                if result:
+                    print ip, "inactive"
+                else:
+                    print ip, "active"
+
+    def get_regions(self):
+        regions_list = []
+        response = self.aws_api(resource=False).describe_regions()['Regions']
+        for region in response:
+            regions_list.append(region['Endpoint'])
+        return regions_list
 
 
     def aws_api(self, resource=True, aws_service='ec2'):
@@ -127,3 +148,8 @@ def start(ssh):
         os.system('ssh -i {} ubuntu@{}'.format(KEYPAIR_PATH, client.start_instance()))
     else:
         client.start_instance()
+
+@_inst_linux.command('test')
+def test():
+    client = aws_client()
+    client._set_region()
