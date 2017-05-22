@@ -1,6 +1,6 @@
 import os
+import re
 import sys
-import time
 import uuid
 import urllib
 
@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 
 session_id = uuid.uuid4().hex
 DEFAULT_REGION = 'eu-west-1'
+INSTANCE_AMI = 'ami-a8d2d7ce'
 MY_IP = urllib.urlopen('http://whatismyip.org').read()
 
 
@@ -41,24 +42,28 @@ class aws_client():
         self.SECRET_KEY = SECRET_KEY
 
 
-    def _set_region(self):
-        import subprocess
-        iplist = self.get_regions()
-        with open(os.devnull, "wb") as limbo:
-            for ip in iplist:
-                result=subprocess.Popen(["ping", "-c", "1", "-i", "0.1", "-n", "-W", "2", ip],
-                                        stdout=limbo, stderr=limbo).wait()
-                if result:
-                    print ip, "inactive"
-                else:
-                    print ip, "active"
-
     def get_regions(self):
         regions_list = []
         response = self.aws_api(resource=False).describe_regions()['Regions']
         for region in response:
             regions_list.append(region['Endpoint'])
         return regions_list
+
+
+    def _set_region(self):
+        import subprocess
+        ip_list = self.get_regions()
+        region_response_time = {}
+        for ip in ip_list:
+            run_ping = subprocess.Popen(["ping", "-c", "2", "-i", "0.1", "-n", "-W", "1", ip],stdout=subprocess.PIPE)
+            ip = re.split('\.', ip)[1]
+            ping_output = run_ping.stdout.read()
+            for line in ping_output.splitlines():
+                if "round-trip" in line:
+                    ping_result =  re.split('\s', line, 4)[3]
+                    ping_avg = re.split('/', ping_result)[1]
+                    region_response_time[ip] = float(ping_avg)
+        return min(region_response_time, key=region_response_time.get)
 
 
     def aws_api(self, resource=True, aws_service='ec2'):
@@ -74,6 +79,22 @@ class aws_client():
                                 region_name=DEFAULT_REGION)
 
 
+    def find_ami(self):
+        # TODO: Improve search
+        flavor = 'CentOS'
+        AMI = self.aws_api(resource=False).describe_images()
+        AMI_dict =  AMI['Images']
+        for image in AMI_dict:
+            try:
+                if flavor in image['Name'] and image['ImageType'] == 'machine':
+                    print image['Name']
+                    print image['ImageId']
+                else:
+                    pass
+            except KeyError:
+                continue
+
+
     def keypair(self):
         try:
             keypair = self.aws_api(resource=False).create_key_pair(KeyName=session_id)
@@ -87,7 +108,7 @@ class aws_client():
 
 
     def start_instance(self):
-        instance = self.aws_api().create_instances(ImageId='ami-a8d2d7ce',
+        instance = self.aws_api().create_instances(ImageId=INSTANCE_AMI,
                                                    MinCount=1,
                                                    MaxCount=1,
                                                    InstanceType='t2.micro',
@@ -109,8 +130,6 @@ class aws_client():
                 print "SG exists - Skipping"
                 pass
         return "INST_LINUX"
-
-
 
 
 
@@ -152,4 +171,4 @@ def start(ssh):
 @_inst_linux.command('test')
 def test():
     client = aws_client()
-    client._set_region()
+    print client.find_ami()
