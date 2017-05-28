@@ -24,11 +24,12 @@ os.chmod(KEYPAIR_PATH, 0600)
 
 # Userdata for the AWS instance
 USERDATA = """#!/bin/bash
-echo export TMOUT=300 >> /etc/environment
+sleep 10
 echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
 chmod +x /root/inst_linux.sh
 echo "* * * * * /root/inst_linux.sh" >> /root/mycron
-crontab /root/mycron"""
+crontab /root/mycron
+echo export TMOUT=300 >> /etc/environment"""
 
 
 class aws_client():
@@ -42,7 +43,7 @@ class aws_client():
         self.SECRET_KEY = SECRET_KEY
 
 
-    def get_regions(self):
+    def _get_regions(self):
         regions_list = []
         response = self.aws_api(resource=False).describe_regions()['Regions']
         for region in response:
@@ -52,7 +53,7 @@ class aws_client():
 
     def _set_region(self):
         import subprocess
-        ip_list = self.get_regions()
+        ip_list = self._get_regions()
         region_response_time = {}
         for ip in ip_list:
             run_ping = subprocess.Popen(["ping", "-c", "2", "-i", "0.1", "-n", "-W", "1", ip],stdout=subprocess.PIPE)
@@ -63,6 +64,8 @@ class aws_client():
                     ping_result =  re.split('\s', line, 4)[3]
                     ping_avg = re.split('/', ping_result)[1]
                     region_response_time[ip] = float(ping_avg)
+        global DEFAULT_REGION
+        DEFAULT_REGION = min(region_response_time, key=region_response_time.get)
         return min(region_response_time, key=region_response_time.get)
 
 
@@ -81,18 +84,34 @@ class aws_client():
 
     def find_ami(self):
         # TODO: Improve search
-        flavor = 'CentOS'
-        AMI = self.aws_api(resource=False).describe_images()
+        flavor = '*ubuntu*'
+        image_count = 0
+        AMI = self.aws_api(resource=False).describe_images(Filters=[
+            {
+                'Name': 'image-type',
+                'Values': [
+                    'machine',
+                ],
+                'Name': 'is-public',
+                'Values': [
+                    'true',
+                ],
+            },
+        ])
         AMI_dict =  AMI['Images']
         for image in AMI_dict:
             try:
                 if flavor in image['Name'] and image['ImageType'] == 'machine':
-                    print image['Name']
-                    print image['ImageId']
+                    image_count += 1
+                    global INSTANCE_AMI
+                    INSTANCE_AMI = image['ImageId']
+                    # print image['Name']
+                    # print image['ImageId']
                 else:
                     pass
             except KeyError:
                 continue
+        print image_count
 
 
     def keypair(self):
@@ -158,13 +177,12 @@ def _inst_linux(ctx):
               '--ssh',
               is_flag=True,
               help='Do you want to connect to your instance?')
-
 def start(ssh):
     """List S3 content
     """
     client = aws_client()
     if ssh:
-        os.system('ssh -i {} ubuntu@{}'.format(KEYPAIR_PATH, client.start_instance()))
+        os.system('ssh -i {} -o StrictHostKeychecking=no ubuntu@{}'.format(KEYPAIR_PATH, client.start_instance()))
     else:
         client.start_instance()
 
