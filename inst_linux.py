@@ -24,12 +24,13 @@ os.chmod(KEYPAIR_PATH, 0600)
 
 # Userdata for the AWS instance
 USERDATA = """#!/bin/bash
+set -x
 sleep 10
 echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
 chmod +x /root/inst_linux.sh
-echo "* * * * * /root/inst_linux.sh" >> /root/mycron
+echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
 crontab /root/mycron
-echo export TMOUT=300 >> /etc/environment"""
+echo export TMOUT=10 >> /etc/environment"""
 
 
 class aws_client():
@@ -92,15 +93,16 @@ class aws_client():
                 'Values': [
                     'machine',
                 ],
-                'Name': 'is-public',
+                'Name': 'name',
                 'Values': [
-                    'true',
-                ],
+                    'bitnami*',
+                ]
             },
         ])
         AMI_dict =  AMI['Images']
         for image in AMI_dict:
             try:
+                print AMI_dict
                 if flavor in image['Name'] and image['ImageType'] == 'machine':
                     image_count += 1
                     global INSTANCE_AMI
@@ -182,7 +184,7 @@ def start(ssh):
     """
     client = aws_client()
     if ssh:
-        os.system('ssh -i {} -o StrictHostKeychecking=no ubuntu@{}'.format(KEYPAIR_PATH, client.start_instance()))
+        os.system('ssh -i {} -o StrictHostKeychecking=no -o ServerAliveInterval=30 ubuntu@{}'.format(KEYPAIR_PATH, client.start_instance()))
     else:
         client.start_instance()
 
