@@ -1,6 +1,3 @@
-# TODO: See distro to implement a logger instead of printing.
-# NO PRINTS! EVER!
-
 import os
 import re
 import uuid
@@ -22,8 +19,6 @@ MY_IP = urllib.urlopen('http://whatismyip.org').read()
 
 
 # Keypair prepiration
-# TODO: use `tempfile.gettmpdir()` or whatever to get the tmp dir.
-# TODO: use `os.path.join` instead of concatenating the path.
 # TODO: Don't open it here and close it in a function. What if the
 # function fails? The file handler will be kept opened.
 INST_KEYPAIR = open('{}/{}'.format(tempfile.gettempdir(), session_id), 'w+')
@@ -185,5 +180,4 @@ def inst(ssh, verbose):
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
     else:
-        print _get_best_region()
-        # start_instance()
+        start_instance()
