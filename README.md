@@ -2,11 +2,13 @@
 
 Easily get a linux distro on AWS
 
-**Prerequeset**<br>
+**Prerequisites**<br>
 Prior to using this tool you'll need to set boto config to grant access to your AWS account.<br>
 Either by setting system variables (`AWS_ACCESS_KEY_ID` & `AWS_SECRET_ACCESS_KEY`) or boto.cfg file
 
 ### Usage
+
+Pass the `-s` flag to connect to the instance as soon as it boots
 
 ```$xslt
 $ inst -s

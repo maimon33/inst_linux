@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 import urllib
+import logging
 import tempfile
 import subprocess
 
@@ -25,8 +26,8 @@ MY_IP = urllib.urlopen('http://whatismyip.org').read()
 # TODO: use `os.path.join` instead of concatenating the path.
 # TODO: Don't open it here and close it in a function. What if the
 # function fails? The file handler will be kept opened.
-INST_KEYPAIR = open('{}/{}'.format(tempfile.gettmpdir(), session_id), 'w+')
-KEYPAIR_PATH = os.path.join(tempfile.gettmpdir(), session_id)
+INST_KEYPAIR = open('{}/{}'.format(tempfile.gettempdir(), session_id), 'w+')
+KEYPAIR_PATH = os.path.join(tempfile.gettempdir(), session_id)
 os.chmod(KEYPAIR_PATH, 0600)
 
 
@@ -39,6 +40,13 @@ chmod +x /root/inst_linux.sh
 echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
 crontab /root/mycron
 echo export TMOUT=300 >> /etc/environment"""
+
+
+# Setting up a logger
+logger = logging.getLogger('inst')
+logger.setLevel(logging.INFO)
+console = logging.StreamHandler()
+logger.addHandler(console)
 
 
 def _get_all_regions():
@@ -112,17 +120,10 @@ def find_ami():
 
 
 def keypair():
-    try:
-        keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
-        INST_KEYPAIR.write(keypair['KeyMaterial'])
-        INST_KEYPAIR.close()
-        return session_id
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'InvalidKeyPair.Duplicate':
-            # TODO: NO PRINTING
-            print "Key exists - Skipping"
-            return session_id
-        # TODO: else?
+    keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
+    INST_KEYPAIR.write(keypair['KeyMaterial'])
+    INST_KEYPAIR.close()
+    return session_id
 
 
 def start_instance():
@@ -136,7 +137,7 @@ def start_instance():
         UserData=USERDATA,
         SecurityGroups=[create_security_group()],
         InstanceInitiatedShutdownBehavior='terminate')[0]
-    print "Waiting for instance to boot..."
+    logger.info('Waiting for instance to boot...')
     instance.wait_until_running()
     instance.load()
     return instance.public_dns_name
@@ -150,8 +151,7 @@ def create_security_group():
             MY_IP), FromPort=22, ToPort=22)
     except ClientError as e:
         if e.response['Error']['Code'] == 'InvalidGroup.Duplicate':
-            # TODO: no printing.
-            print "SG exists - Skipping"
+            logger.debug("SG exists - Skipping")
             pass
     return "INST_LINUX"
 
@@ -167,18 +167,23 @@ CLICK_CONTEXT_SETTINGS = dict(
               '--ssh',
               is_flag=True,
               help='Do you want to connect to your instance?')
-def inst(ssh):
+@click.option('-v',
+              '--verbose',
+              is_flag=True,
+              help="display run log in verbose mode")
+def inst(ssh, verbose):
     """Get a Linux distro instance on AWS with one click
     """
     # TODO: Handle error when instance creation failed.
+    if verbose:
+        logger.setLevel(logging.DEBUG)
     if ssh:
-        # TODO: Replace os.system with subprocess.
         ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
                                 'StrictHostKeychecking=no',
                                 'ubuntu@{}'.format(start_instance())],
                                stderr=subprocess.PIPE)
         if "Operation timed out" in ssh.stderr.readlines()[0]:
-            print "Could not connect to Instance"
+            logging.warning("Could not connect to Instance")
     else:
         print _get_best_region()
         # start_instance()
