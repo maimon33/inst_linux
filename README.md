@@ -1,16 +1,21 @@
-# inst_linux
+# inst
 
-Easily get a linux distro on AWS
+Easily get an instance on AWS
+
+**WIP!**
+Right now all you get is an Ubuntu 16.04 in eu-west-1
+
+**Prerequisites**<br>
+Prior to using this tool you'll need to set boto config to grant access to your AWS account.<br>
+Either by setting system variables (`AWS_ACCESS_KEY_ID` & `AWS_SECRET_ACCESS_KEY`) or boto.cfg file
 
 ### Usage
 
-```$xslt
-$ inst_linux start --ssh
+Pass the `-s` flag to connect to the instance as soon as it boots
 
-The authenticity of host 'ec2-54-246-146-214.eu-west-1.compute.amazonaws.com (54.246.146.214)' can't be established.
-ECDSA key fingerprint is SHA256:1TTm5k5MNx/GjQ2Z74o3Y41bjFbSCZB5vr2g3wmu714.
-Are you sure you want to continue connecting (yes/no)? yes
-Warning: Permanently added 'ec2-54-246-146-214.eu-west-1.compute.amazonaws.com,54.246.146.214' (ECDSA) to the list of known hosts.
+```$xslt
+$ inst -s
+Waiting for instance to boot...
 Welcome to Ubuntu 16.04.2 LTS (GNU/Linux 4.4.0-1013-aws x86_64)
 
  * Documentation:  https://help.ubuntu.com
@@ -34,6 +39,4 @@ applicable law.
 
 To run a command as administrator (user "root"), use "sudo <command>".
 See "man sudo_root" for details.
-
-ubuntu@ip-172-31-46-154:~$
 ```

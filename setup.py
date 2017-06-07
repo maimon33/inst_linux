@@ -16,16 +16,16 @@
 from setuptools import setup
 
 setup(
-    name='inst_linux',
-    version='0.1.1',
+    name='inst',
+    version='0.2.0',
     author='Assi Maimon',
     author_email='maimon33@gmail.com',
     license='LICENSE',
-    py_modules=['inst_linux'],
-    description='Get a linux instance in AWS with a click',
+    py_modules=['inst'],
+    description='Get a linux instance on AWS with a click',
     entry_points={
         'console_scripts': [
-                'inst_linux=inst_linux:_inst_linux',
+                'inst=inst:inst',
         ],
     },
     install_requires=[
