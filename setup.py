@@ -16,20 +16,20 @@
 from setuptools import setup
 
 setup(
-    name='instant',
+    name='inst',
     version='0.2.0',
     author='Assi Maimon',
     author_email='maimon33@gmail.com',
     license='LICENSE',
-    py_modules=['instant'],
+    py_modules=['inst'],
     description='Get a linux instance on AWS with a click',
     entry_points={
         'console_scripts': [
-                'inst=instant:instant',
+                'inst=inst:inst',
         ],
     },
     install_requires=[
         'boto3==1.4.4',
-        'click==6.7',
+        'click==6.6',
     ]
 )
