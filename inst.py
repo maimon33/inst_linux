@@ -1,5 +1,4 @@
 import os
-import re
 import uuid
 import urllib
 import logging
@@ -44,74 +43,11 @@ console = logging.StreamHandler()
 logger.addHandler(console)
 
 
-def _get_all_regions():
-    region_list = []
-    response = aws_client(
-        resource=False).describe_regions()['Regions']
-    for region in response:
-        region_list.append(region['Endpoint'])
-    return region_list
-
-
-def ping_hosts(ips):
-    ips_response_time = {}
-    for ip in ips:
-        execute_ping = subprocess.Popen(
-            ["ping", "-c", "2", "-i", "0.1", "-n", "-W", "1", ip],
-            stdout=subprocess.PIPE)
-        ip = re.split('\.', ip)[1]
-        ping_output = execute_ping.stdout.read()
-        for line in ping_output.splitlines():
-            if "round-trip" in line:
-                ping_result = re.split('\s', line, 4)[3]
-                ping_avg = re.split('/', ping_result)[1]
-                ips_response_time[ip] = float(ping_avg)
-    return ips_response_time
-
-
-def _get_best_region():
-    ip_list = _get_all_regions()
-    regions_response_time = ping_hosts(ip_list)
-    return min(regions_response_time, key=regions_response_time.get)
-
-
 def aws_client(resource=True, aws_service='ec2'):
     if resource:
         return boto3.resource(aws_service)
     else:
         return boto3.client(aws_service)
-
-
-def test():
-    return dir(aws_client(resource=False))
-
-def find_ami():
-    # TODO: Improve search
-    flavor = '*ubuntu*'
-    image_count = 0
-    ami = aws_client(resource=False).describe_images(Filters=[
-        {
-            'Name': 'image-type',
-            'Values': [
-                'machine',
-            ],
-            'Name': 'name',
-            'Values': [
-                'bitnami*',
-            ]
-        },
-    ])
-    amis = ami['Images']
-    for image in amis:
-        try:
-            if flavor in image['Name'] and image['ImageType'] == 'machine':
-                image_count += 1
-                return image['ImageId']
-            else:
-                pass
-        except KeyError:
-            continue
-    # TODO: What happens when an AMI isn't found?
 
 
 def keypair():
