@@ -1,6 +1,9 @@
-# inst_linux
+# inst
 
-Easily get a linux distro on AWS
+Easily get an instance on AWS
+
+**WIP!**
+Right now all you get is an Ubuntu 16.04 in eu-west-1
 
 **Prerequisites**<br>
 Prior to using this tool you'll need to set boto config to grant access to your AWS account.<br>
