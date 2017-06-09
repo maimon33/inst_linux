@@ -177,4 +177,4 @@ def inst(ssh, verbose):
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
     else:
-        start_instance()
+        print start_instance()
