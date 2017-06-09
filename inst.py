@@ -18,8 +18,6 @@ MY_IP = urllib.urlopen('http://whatismyip.org').read()
 
 
 # Keypair prepiration
-# TODO: Don't open it here and close it in a function. What if the
-# function fails? The file handler will be kept opened.
 INST_KEYPAIR = open('{}/{}'.format(tempfile.gettempdir(), session_id), 'w+')
 KEYPAIR_PATH = os.path.join(tempfile.gettempdir(), session_id)
 os.chmod(KEYPAIR_PATH, 0600)
@@ -116,4 +114,4 @@ def inst(ssh, verbose):
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
     else:
-        start_instance()
+        print start_instance()
