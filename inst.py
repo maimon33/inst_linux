@@ -13,18 +13,16 @@ from botocore.exceptions import ClientError
 
 session_id = uuid.uuid4().hex
 DEFAULT_REGION = 'eu-west-1'
-INSTANCE_AMI = 'ami-add175d4'
-USERNAME = 'ubuntu'
 INSTANCE_DNS = ''
 MY_IP = urllib.urlopen('http://whatismyip.org').read()
 
 
 DISTRO_DICTIONARY = {
-    'amazon':'ami-1a962263',
-    'redhat':'ami-bb9a6bc2',
-    'suse': 'ami-6fd16616',
-    'centos': 'ami-192a9460',
-    'ubuntu': 'ami-8fd760f6'
+    'amazon':('ec2-user','ami-1a962263'),
+    'redhat':('root','ami-bb9a6bc2'),
+    'suse': ('root','ami-6fd16616'),
+    'centos': ('centos','ami-192a9460'),
+    'ubuntu': ('ubuntu','ami-8fd760f6')
     }
 
 
@@ -62,7 +60,7 @@ def aws_client(resource=True, aws_service='ec2'):
 def distro_selection(distro):
     if distro in DISTRO_DICTIONARY:
         global INSTANCE_AMI
-        INSTANCE_AMI = DISTRO_DICTIONARY[distro]
+        INSTANCE_AMI = DISTRO_DICTIONARY[distro][1]
     else:
         logging.warning("{} is currently not supported".format(distro))
         sys.exit()
@@ -134,7 +132,9 @@ def inst(distro, ssh, verbose):
     if ssh:
         ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
                                 'StrictHostKeychecking=no',
-                                '{}@{}'.format(USERNAME, start_instance())], 
+                                '{}@{}'.format(
+                                    DISTRO_DICTIONARY[distro][0],
+                                    start_instance())], 
                                stderr=subprocess.PIPE)
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
@@ -142,4 +142,4 @@ def inst(distro, ssh, verbose):
         start_instance()
         logger.info("In case connection fails connect manually\n")
         logger.info("ssh -i {} -o 'StrictHostKeychecking=no' {}@{}".format(
-            KEYPAIR_PATH, USERNAME, INSTANCE_DNS))
+            KEYPAIR_PATH, DISTRO_DICTIONARY[distro][0], INSTANCE_DNS))
