@@ -13,8 +13,19 @@ from botocore.exceptions import ClientError
 
 session_id = uuid.uuid4().hex
 DEFAULT_REGION = 'eu-west-1'
-INSTANCE_AMI = 'ami-a8d2d7ce'
+INSTANCE_AMI = 'ami-add175d4'
+USERNAME = 'ubuntu'
+INSTANCE_DNS = ''
 MY_IP = urllib.urlopen('http://whatismyip.org').read()
+
+
+DISTRO_DICTIONARY = {
+    'amazon':'ami-1a962263',
+    'redhat':'ami-bb9a6bc2',
+    'suse': 'ami-6fd16616',
+    'centos': 'ami-192a9460',
+    'ubuntu': 'ami-8fd760f6'
+    }
 
 
 # Keypair prepiration
@@ -48,6 +59,15 @@ def aws_client(resource=True, aws_service='ec2'):
         return boto3.client(aws_service)
 
 
+def distro_selection(distro):
+    if distro in DISTRO_DICTIONARY:
+        global INSTANCE_AMI
+        INSTANCE_AMI = DISTRO_DICTIONARY[distro]
+    else:
+        logging.warning("{} is currently not supported".format(distro))
+        sys.exit()
+        
+
 def keypair():
     keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
     INST_KEYPAIR.write(keypair['KeyMaterial'])
@@ -69,6 +89,8 @@ def start_instance():
     logger.info('Waiting for instance to boot...')
     instance.wait_until_running()
     instance.load()
+    global INSTANCE_DNS
+    INSTANCE_DNS = instance.public_dns_name
     return instance.public_dns_name
 
 
@@ -92,6 +114,7 @@ CLICK_CONTEXT_SETTINGS = dict(
 
 
 @click.command(context_settings=CLICK_CONTEXT_SETTINGS)
+@click.argument('distro', default="ubuntu")
 @click.option('-s',
               '--ssh',
               is_flag=True,
@@ -100,18 +123,23 @@ CLICK_CONTEXT_SETTINGS = dict(
               '--verbose',
               is_flag=True,
               help="display run log in verbose mode")
-def inst(ssh, verbose):
+def inst(distro, ssh, verbose):
     """Get a Linux distro instance on AWS with one click
     """
     # TODO: Handle error when instance creation failed.
+    if distro != "ubuntu":
+        distro_selection(distro)
     if verbose:
         logger.setLevel(logging.DEBUG)
     if ssh:
         ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
                                 'StrictHostKeychecking=no',
-                                'ubuntu@{}'.format(start_instance())],
+                                '{}@{}'.format(USERNAME, start_instance())], 
                                stderr=subprocess.PIPE)
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
     else:
-        print start_instance()
+        start_instance()
+        logger.info("In case connection fails connect manually\n")
+        logger.info("ssh -i {} -o 'StrictHostKeychecking=no' {}@{}".format(
+            KEYPAIR_PATH, USERNAME, INSTANCE_DNS))
