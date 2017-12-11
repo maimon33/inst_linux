@@ -79,7 +79,7 @@ def start_instance():
         ImageId=INSTANCE_AMI,
         MinCount=1,
         MaxCount=1,
-        InstanceType='t2.micro',
+        InstanceType='t2.medium',
         KeyName=keypair(),
         UserData=USERDATA,
         SecurityGroups=[create_security_group()],
@@ -136,6 +136,8 @@ def inst(distro, ssh, verbose):
                                     DISTRO_DICTIONARY[distro][0],
                                     start_instance())], 
                                stderr=subprocess.PIPE)
+        logger.info("ssh -i {} -o 'StrictHostKeychecking=no' {}@{}".format(
+            KEYPAIR_PATH, DISTRO_DICTIONARY[distro][0], INSTANCE_DNS))
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
     else:
