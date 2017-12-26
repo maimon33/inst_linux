@@ -1,6 +1,8 @@
 import os
+import sys
 import uuid
 import urllib
+import socket
 import logging
 import tempfile
 import subprocess
@@ -8,7 +10,7 @@ import subprocess
 import boto3
 import click
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoCredentialsError
 
 
 session_id = uuid.uuid4().hex
@@ -33,14 +35,15 @@ os.chmod(KEYPAIR_PATH, 0600)
 
 
 # Userdata for the AWS instance
-USERDATA = """#!/bin/bash
-set -x
-sleep 10
-echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
-chmod +x /root/inst_linux.sh
-echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
-crontab /root/mycron
-echo export TMOUT=300 >> /etc/environment"""
+USERDATA = ""
+# USERDATA = """#!/bin/bash
+# set -x
+# sleep 10
+# echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
+# chmod +x /root/inst_linux.sh
+# echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
+# crontab /root/mycron
+# echo export TMOUT=300 >> /etc/environment"""
 
 
 # Setting up a logger
@@ -49,12 +52,20 @@ logger.setLevel(logging.INFO)
 console = logging.StreamHandler()
 logger.addHandler(console)
 
+def _is_connected():
+    try:
+        socket.create_connection(("www.google.com", 80))
+        return True
+    except OSError:
+        pass
+    return False
 
-def aws_client(resource=True, aws_service='ec2'):
+
+def aws_client(resource=True, aws_service='ec2', region_name=DEFAULT_REGION):
     if resource:
-        return boto3.resource(aws_service)
+        return boto3.resource(aws_service, region_name)
     else:
-        return boto3.client(aws_service)
+        return boto3.client(aws_service, region_name)
 
 
 def distro_selection(distro):
@@ -64,7 +75,7 @@ def distro_selection(distro):
     else:
         logging.warning("{} is currently not supported".format(distro))
         sys.exit()
-        
+    
 
 def keypair():
     keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
@@ -74,7 +85,12 @@ def keypair():
 
 
 def start_instance():
-    client = aws_client()
+    try:
+        client = aws_client()
+    except NoCredentialsError as e:
+        print "Yo2"
+        if e.response['Error']['Code'] == 'Unable to locate credentials':
+            print "Yo"
     instance = client.create_instances(
         ImageId=INSTANCE_AMI,
         MinCount=1,
@@ -121,12 +137,25 @@ CLICK_CONTEXT_SETTINGS = dict(
               '--verbose',
               is_flag=True,
               help="display run log in verbose mode")
-def inst(distro, ssh, verbose):
+@click.option('-d',
+              '--debug',
+              is_flag=True,
+              help="debug new features")
+def inst(distro, ssh, verbose, debug):
     """Get a Linux distro instance on AWS with one click
     """
-    # TODO: Handle error when instance creation failed.
-    if distro != "ubuntu":
-        distro_selection(distro)
+    distro_selection(distro)
+
+    if _is_connected():
+        pass
+    else:
+        logger.warning("No Internet connection present!")
+        sys.exit()
+    
+    if debug:
+        print "Hi"
+        find_ami()
+        sys.exit()
     if verbose:
         logger.setLevel(logging.DEBUG)
     if ssh:
