@@ -16,8 +16,14 @@ from botocore.exceptions import ClientError, NoCredentialsError
 session_id = uuid.uuid4().hex
 DEFAULT_REGION = 'eu-west-1'
 INSTANCE_DNS = ''
-MY_IP = urllib.urlopen('http://whatismyip.org').read()
 
+try:
+    urllib2.urlopen('http://www.google.com', timeout=1)
+    MY_IP = urllib.urlopen('http://whatismyip.org').read()
+except (urllib2.URLError, socket.timeout):
+    MY_IP = ""
+    print "No Internet"
+    sys.exit()
 
 DISTRO_DICTIONARY = {
     'amazon':('ec2-user','ami-1a962263'),
@@ -60,13 +66,11 @@ def _is_connected():
         pass
     return False
 
-
 def aws_client(resource=True, aws_service='ec2', region_name=DEFAULT_REGION):
     if resource:
         return boto3.resource(aws_service, region_name)
     else:
         return boto3.client(aws_service, region_name)
-
 
 def distro_selection(distro):
     if distro in DISTRO_DICTIONARY:
@@ -76,13 +80,11 @@ def distro_selection(distro):
         logging.warning("{} is currently not supported".format(distro))
         sys.exit()
     
-
 def keypair():
     keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
     INST_KEYPAIR.write(keypair['KeyMaterial'])
     INST_KEYPAIR.close()
     return session_id
-
 
 def start_instance():
     try:
@@ -95,7 +97,7 @@ def start_instance():
         ImageId=INSTANCE_AMI,
         MinCount=1,
         MaxCount=1,
-        InstanceType='t2.medium',
+        InstanceType='t2.nano',
         KeyName=keypair(),
         UserData=USERDATA,
         SecurityGroups=[create_security_group()],
@@ -106,7 +108,6 @@ def start_instance():
     global INSTANCE_DNS
     INSTANCE_DNS = instance.public_dns_name
     return instance.public_dns_name
-
 
 def create_security_group():
     try:
@@ -125,7 +126,6 @@ CLICK_CONTEXT_SETTINGS = dict(
     help_option_names=['-h', '--help'],
     token_normalize_func=lambda param: param.lower(),
     ignore_unknown_options=True)
-
 
 @click.command(context_settings=CLICK_CONTEXT_SETTINGS)
 @click.argument('distro', default="ubuntu")
@@ -164,7 +164,7 @@ def inst(distro, ssh, verbose, debug):
                                 '{}@{}'.format(
                                     DISTRO_DICTIONARY[distro][0],
                                     start_instance())], 
-                               stderr=subprocess.PIPE)
+                                stderr=subprocess.PIPE)
         logger.info("ssh -i {} -o 'StrictHostKeychecking=no' {}@{}".format(
             KEYPAIR_PATH, DISTRO_DICTIONARY[distro][0], INSTANCE_DNS))
         if "Operation timed out" in ssh.stderr.readlines()[0]:
