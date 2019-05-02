@@ -1,6 +1,8 @@
 import os
+import sys
 import uuid
 import urllib
+import socket
 import logging
 import tempfile
 import subprocess
@@ -8,13 +10,28 @@ import subprocess
 import boto3
 import click
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoCredentialsError
 
 
 session_id = uuid.uuid4().hex
 DEFAULT_REGION = 'eu-west-1'
-INSTANCE_AMI = 'ami-a8d2d7ce'
-MY_IP = urllib.urlopen('http://whatismyip.org').read()
+INSTANCE_DNS = ''
+
+try:
+    urllib2.urlopen('http://www.google.com', timeout=1)
+    MY_IP = urllib.urlopen('http://whatismyip.org').read()
+except (urllib2.URLError, socket.timeout):
+    MY_IP = ""
+    print "No Internet"
+    sys.exit()
+
+DISTRO_DICTIONARY = {
+    'amazon':('ec2-user','ami-1a962263'),
+    'redhat':('root','ami-bb9a6bc2'),
+    'suse': ('root','ami-6fd16616'),
+    'centos': ('centos','ami-192a9460'),
+    'ubuntu': ('ubuntu','ami-8fd760f6')
+    }
 
 
 # Keypair prepiration
@@ -24,14 +41,15 @@ os.chmod(KEYPAIR_PATH, 0600)
 
 
 # Userdata for the AWS instance
-USERDATA = """#!/bin/bash
-set -x
-sleep 10
-echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
-chmod +x /root/inst_linux.sh
-echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
-crontab /root/mycron
-echo export TMOUT=300 >> /etc/environment"""
+USERDATA = ""
+# USERDATA = """#!/bin/bash
+# set -x
+# sleep 10
+# echo "#!/bin/bash\nif who | wc -l | grep -q 1 ; then shutdown -h +5 'Server Idle, Server termination' ; fi" > /root/inst_linux.sh
+# chmod +x /root/inst_linux.sh
+# echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
+# crontab /root/mycron
+# echo export TMOUT=300 >> /etc/environment"""
 
 
 # Setting up a logger
@@ -40,28 +58,46 @@ logger.setLevel(logging.INFO)
 console = logging.StreamHandler()
 logger.addHandler(console)
 
+def _is_connected():
+    try:
+        socket.create_connection(("www.google.com", 80))
+        return True
+    except OSError:
+        pass
+    return False
 
-def aws_client(resource=True, aws_service='ec2'):
+def aws_client(resource=True, aws_service='ec2', region_name=DEFAULT_REGION):
     if resource:
-        return boto3.resource(aws_service)
+        return boto3.resource(aws_service, region_name)
     else:
-        return boto3.client(aws_service)
+        return boto3.client(aws_service, region_name)
 
-
+def distro_selection(distro):
+    if distro in DISTRO_DICTIONARY:
+        global INSTANCE_AMI
+        INSTANCE_AMI = DISTRO_DICTIONARY[distro][1]
+    else:
+        logging.warning("{} is currently not supported".format(distro))
+        sys.exit()
+    
 def keypair():
     keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
     INST_KEYPAIR.write(keypair['KeyMaterial'])
     INST_KEYPAIR.close()
     return session_id
 
-
 def start_instance():
-    client = aws_client()
+    try:
+        client = aws_client()
+    except NoCredentialsError as e:
+        print "Yo2"
+        if e.response['Error']['Code'] == 'Unable to locate credentials':
+            print "Yo"
     instance = client.create_instances(
         ImageId=INSTANCE_AMI,
         MinCount=1,
         MaxCount=1,
-        InstanceType='t2.micro',
+        InstanceType='t2.nano',
         KeyName=keypair(),
         UserData=USERDATA,
         SecurityGroups=[create_security_group()],
@@ -69,8 +105,9 @@ def start_instance():
     logger.info('Waiting for instance to boot...')
     instance.wait_until_running()
     instance.load()
+    global INSTANCE_DNS
+    INSTANCE_DNS = instance.public_dns_name
     return instance.public_dns_name
-
 
 def create_security_group():
     try:
@@ -90,8 +127,8 @@ CLICK_CONTEXT_SETTINGS = dict(
     token_normalize_func=lambda param: param.lower(),
     ignore_unknown_options=True)
 
-
 @click.command(context_settings=CLICK_CONTEXT_SETTINGS)
+@click.argument('distro', default="ubuntu")
 @click.option('-s',
               '--ssh',
               is_flag=True,
@@ -100,18 +137,40 @@ CLICK_CONTEXT_SETTINGS = dict(
               '--verbose',
               is_flag=True,
               help="display run log in verbose mode")
-def inst(ssh, verbose):
+@click.option('-d',
+              '--debug',
+              is_flag=True,
+              help="debug new features")
+def inst(distro, ssh, verbose, debug):
     """Get a Linux distro instance on AWS with one click
     """
-    # TODO: Handle error when instance creation failed.
+    distro_selection(distro)
+
+    if _is_connected():
+        pass
+    else:
+        logger.warning("No Internet connection present!")
+        sys.exit()
+    
+    if debug:
+        print "Hi"
+        find_ami()
+        sys.exit()
     if verbose:
         logger.setLevel(logging.DEBUG)
     if ssh:
         ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
                                 'StrictHostKeychecking=no',
-                                'ubuntu@{}'.format(start_instance())],
-                               stderr=subprocess.PIPE)
+                                '{}@{}'.format(
+                                    DISTRO_DICTIONARY[distro][0],
+                                    start_instance())], 
+                                stderr=subprocess.PIPE)
+        logger.info("ssh -i {} -o 'StrictHostKeychecking=no' {}@{}".format(
+            KEYPAIR_PATH, DISTRO_DICTIONARY[distro][0], INSTANCE_DNS))
         if "Operation timed out" in ssh.stderr.readlines()[0]:
             logging.warning("Could not connect to Instance")
     else:
-        print start_instance()
+        start_instance()
+        logger.info("In case connection fails connect manually\n")
+        logger.info("ssh -i {} -o 'StrictHostKeychecking=no' {}@{}".format(
+            KEYPAIR_PATH, DISTRO_DICTIONARY[distro][0], INSTANCE_DNS))
