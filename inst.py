@@ -1,6 +1,7 @@
 import os
 import sys
 import uuid
+import base64
 import urllib
 import logging
 import tempfile
@@ -13,16 +14,15 @@ from botocore.exceptions import ClientError, NoRegionError
 
 
 session_id = uuid.uuid4().hex
+DEFAULT_INSTANCE_TYPE = "t2.micro"
 DEFAULT_REGION = 'eu-west-1'
 INSTANCE_AMI = 'ami-a8d2d7ce'
 MY_IP = urllib.urlopen('http://whatismyip.org').read()
-
 
 # Keypair prepiration
 INST_KEYPAIR = open('{}/{}'.format(tempfile.gettempdir(), session_id), 'w+')
 KEYPAIR_PATH = os.path.join(tempfile.gettempdir(), session_id)
 os.chmod(KEYPAIR_PATH, 0600)
-
 
 # Userdata for the AWS instance
 USERDATA = """#!/bin/bash
@@ -33,7 +33,6 @@ chmod +x /root/inst_linux.sh
 echo "*/15 * * * * root /root/inst_linux.sh" >> /root/mycron
 crontab /root/mycron
 echo export TMOUT=300 >> /etc/environment"""
-
 
 # Setting up a logger
 logger = logging.getLogger('inst')
@@ -52,31 +51,6 @@ def aws_client(resource=True, aws_service='ec2'):
         logger.warning("Error reading 'Default Region'. Make sure boto is configured")
         sys.exit()
 
-
-def keypair():
-    keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
-    INST_KEYPAIR.write(keypair['KeyMaterial'])
-    INST_KEYPAIR.close()
-    return session_id
-
-
-def start_instance():
-    client = aws_client()
-    instance = client.create_instances(
-        ImageId=INSTANCE_AMI,
-        MinCount=1,
-        MaxCount=1,
-        InstanceType='t2.micro',
-        KeyName=keypair(),
-        UserData=USERDATA,
-        SecurityGroups=[create_security_group()],
-        InstanceInitiatedShutdownBehavior='terminate')[0]
-    logger.info('Waiting for instance to boot...')
-    instance.wait_until_running()
-    instance.load()
-    return instance.public_dns_name
-
-
 def create_security_group():
     try:
         mysg = aws_client().create_security_group(
@@ -88,6 +62,61 @@ def create_security_group():
             logger.debug("SG exists - Skipping")
             pass
     return "INST_LINUX"
+
+def keypair():
+    keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
+    INST_KEYPAIR.write(keypair['KeyMaterial'])
+    INST_KEYPAIR.close()
+    return session_id
+
+def get_spot_info(spotid):
+    client = aws_client(resource=False)
+    spot_status = client.describe_spot_instance_requests(SpotInstanceRequestIds=[spotid])
+    return spot_status["SpotInstanceRequests"][0]
+
+def get_spot_price(type):
+    client = aws_client(resource=False)
+    return client.describe_spot_price_history(InstanceTypes=[type],MaxResults=1,ProductDescriptions=['Linux/UNIX (Amazon VPC)'])["SpotPriceHistory"][0]["SpotPrice"]
+
+def start_instance(spot=False):
+    if spot:
+        client = aws_client(resource=False)
+        LaunchSpecifications = {
+            "ImageId": INSTANCE_AMI,
+            "InstanceType": DEFAULT_INSTANCE_TYPE,
+            "KeyName": keypair(),
+            "UserData": base64.b64encode(USERDATA.encode("ascii")).\
+                decode('ascii'),
+            "SecurityGroupIds": ["sg-b247c9ca"]
+        }
+        spot_instance = client.request_spot_instances(
+            SpotPrice=get_spot_price(DEFAULT_INSTANCE_TYPE),
+            Type="one-time",
+            InstanceCount=1,
+            LaunchSpecification=LaunchSpecifications)
+        SpotId = spot_instance["SpotInstanceRequests"][0]["SpotInstanceRequestId"]
+    else:
+        client = aws_client()
+        instance = client.create_instances(
+            ImageId=INSTANCE_AMI,
+            MinCount=1,
+            MaxCount=1,
+            InstanceType=DEFAULT_INSTANCE_TYPE,
+            KeyName=keypair(),
+            UserData=USERDATA,
+            SecurityGroups=[create_security_group()],
+            InstanceInitiatedShutdownBehavior='terminate')[0]
+    
+    if not spot:
+        logger.info('Waiting for instance to boot...')
+    else:
+        while get_spot_info(SpotId)["Status"]["Code"] != "fulfilled":
+            print "Waiting for spot approval..."
+        instance = aws_client().Instance(id=get_spot_info(SpotId)["InstanceId"])
+    
+    instance.wait_until_running()
+    instance.load()
+    return instance.public_dns_name
 
 
 CLICK_CONTEXT_SETTINGS = dict(
@@ -101,22 +130,39 @@ CLICK_CONTEXT_SETTINGS = dict(
               '--ssh',
               is_flag=True,
               help='Do you want to connect to your instance?')
+@click.option('--spot',
+              is_flag=True,
+              help='Do you want a spot instance type?')
 @click.option('-v',
               '--verbose',
               is_flag=True,
               help="display run log in verbose mode")
-def inst(ssh, verbose):
+def inst(ssh, spot, verbose):
     """Get a Linux distro instance on AWS with one click
     """
     # TODO: Handle error when instance creation failed.
     if verbose:
         logger.setLevel(logging.DEBUG)
     if ssh:
-        ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
-                                'StrictHostKeychecking=no',
-                                'ubuntu@{}'.format(start_instance())],
-                               stderr=subprocess.PIPE)
-        if "Operation timed out" in ssh.stderr.readlines()[0]:
-            logging.warning("Could not connect to Instance")
+        if spot:
+            ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
+                                    'StrictHostKeychecking=no',
+                                    'ubuntu@{}'.format(start_instance(spot=True))],
+                                stderr=subprocess.PIPE)
+            if "Operation timed out" in ssh.stderr.readlines()[0]:
+                logging.warning("Could not connect to Instance")
+        else:
+            ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
+                                    'StrictHostKeychecking=no',
+                                    'ubuntu@{}'.format(start_instance())],
+                                stderr=subprocess.PIPE)
+            if "Operation timed out" in ssh.stderr.readlines()[0]:
+                logging.warning("Could not connect to Instance")
     else:
-        print start_instance()
+        if spot:
+            instance_address = start_instance(spot=True)
+        else:
+            instance_address = start_instance()
+        print "To connect to your instance:"
+        print "ssh -i {} ubuntu@{}".format(KEYPAIR_PATH, instance_address)
+        
