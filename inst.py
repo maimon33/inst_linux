@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 import urllib
 import logging
@@ -8,7 +9,7 @@ import subprocess
 import boto3
 import click
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoRegionError
 
 
 session_id = uuid.uuid4().hex
@@ -42,10 +43,14 @@ logger.addHandler(console)
 
 
 def aws_client(resource=True, aws_service='ec2'):
-    if resource:
-        return boto3.resource(aws_service)
-    else:
-        return boto3.client(aws_service)
+    try:
+        if resource:
+            return boto3.resource(aws_service)
+        else:
+            return boto3.client(aws_service)
+    except NoRegionError as e:
+        logger.warning("Error reading 'Default Region'. Make sure boto is configured")
+        sys.exit()
 
 
 def keypair():
