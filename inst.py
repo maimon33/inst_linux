@@ -93,7 +93,8 @@ def start_instance(spot=False):
             SpotPrice=get_spot_price(DEFAULT_INSTANCE_TYPE),
             Type="one-time",
             InstanceCount=1,
-            LaunchSpecification=LaunchSpecifications)
+            LaunchSpecification=LaunchSpecifications,
+            InstanceInterruptionBehavior='terminate')
         SpotId = spot_instance["SpotInstanceRequests"][0]["SpotInstanceRequestId"]
     else:
         client = aws_client()
