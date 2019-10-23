@@ -50,6 +50,23 @@ def aws_client(resource=True, aws_service='ec2'):
     except NoRegionError as e:
         logger.warning("Error reading 'Default Region'. Make sure boto is configured")
         sys.exit()
+        
+        
+def check_spot_status(client, SpotId):
+    status_code = get_spot_info(SpotId)["Status"]["Code"]
+    while status_code != "fulfilled":
+        status_code = get_spot_info(SpotId)["Status"]["Code"]
+        status_msg = get_spot_info(SpotId)["Status"]["Message"]
+        if status_code == 'capacity-not-available' or status_code == 'pending-fulfillment' or status_code == 'fulfilled':
+            sys.stdout.write('\x1b[1A')
+            sys.stdout.write('\x1b[2K')
+            print('{0}...'.format(status_code))
+        else:
+            print("{0}\n{1}".format(status_code, status_msg))
+            print("cancel spot request- {0}".format(SpotId))
+            client.cancel_spot_instance_requests(SpotInstanceRequestIds=[SpotId])
+            sys.exit(0)
+
 
 def create_security_group():
     try:
@@ -87,14 +104,14 @@ def start_instance(spot=False):
             "KeyName": keypair(),
             "UserData": base64.b64encode(USERDATA.encode("ascii")).\
                 decode('ascii'),
-            "SecurityGroupIds": ["sg-b247c9ca"]
+            "SecurityGroupIds": ["sg-b247c9ca"],
+            "Placement": {"AvailabilityZone": ""}
         }
         spot_instance = client.request_spot_instances(
             SpotPrice=get_spot_price(DEFAULT_INSTANCE_TYPE),
             Type="one-time",
             InstanceCount=1,
-            LaunchSpecification=LaunchSpecifications,
-            InstanceInterruptionBehavior='terminate')
+            LaunchSpecification=LaunchSpecifications)
         SpotId = spot_instance["SpotInstanceRequests"][0]["SpotInstanceRequestId"]
     else:
         client = aws_client()
@@ -111,8 +128,7 @@ def start_instance(spot=False):
     if not spot:
         logger.info('Waiting for instance to boot...')
     else:
-        while get_spot_info(SpotId)["Status"]["Code"] != "fulfilled":
-            print "Waiting for spot approval..."
+        check_spot_status(client, SpotId)
         instance = aws_client().Instance(id=get_spot_info(SpotId)["InstanceId"])
     
     instance.wait_until_running()
