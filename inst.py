@@ -2,7 +2,6 @@ import os
 import sys
 import uuid
 import base64
-import urllib
 import logging
 import tempfile
 import subprocess
@@ -10,6 +9,7 @@ import subprocess
 import boto3
 import click
 
+from requests import get
 from botocore.exceptions import ClientError, NoRegionError
 
 
@@ -17,7 +17,7 @@ session_id = uuid.uuid4().hex
 DEFAULT_INSTANCE_TYPE = "t2.micro"
 DEFAULT_REGION = 'eu-west-1'
 INSTANCE_AMI = 'ami-a8d2d7ce'
-MY_IP = urllib.urlopen('http://whatismyip.org').read()
+MY_IP = get('https://api.ipify.org').text
 
 # Keypair prepiration
 INST_KEYPAIR = open('{}/{}'.format(tempfile.gettempdir(), session_id), 'w+')
@@ -50,7 +50,15 @@ def aws_client(resource=True, aws_service='ec2'):
     except NoRegionError as e:
         logger.warning("Error reading 'Default Region'. Make sure boto is configured")
         sys.exit()
-        
+
+def get_spot_info(spotid):
+    client = aws_client(resource=False)
+    spot_status = client.describe_spot_instance_requests(SpotInstanceRequestIds=[spotid])
+    return spot_status["SpotInstanceRequests"][0]
+
+def get_spot_price(type):
+    client = aws_client(resource=False)
+    return client.describe_spot_price_history(InstanceTypes=[type],MaxResults=1,ProductDescriptions=['Linux/UNIX (Amazon VPC)'])["SpotPriceHistory"][0]["SpotPrice"]        
         
 def check_spot_status(client, SpotId):
     status_code = get_spot_info(SpotId)["Status"]["Code"]
@@ -67,18 +75,22 @@ def check_spot_status(client, SpotId):
             client.cancel_spot_instance_requests(SpotInstanceRequestIds=[SpotId])
             sys.exit(0)
 
-
 def create_security_group():
     try:
-        mysg = aws_client().create_security_group(
+        My_SecurityGroup = aws_client().create_security_group(
             GroupName="INST_LINUX", Description='Single serving SG')
-        mysg.authorize_ingress(IpProtocol="tcp", CidrIp='0.0.0.0/0'.format(
+        My_SecurityGroup.authorize_ingress(IpProtocol="tcp", CidrIp='0.0.0.0/0'.format(
             MY_IP), FromPort=22, ToPort=22)
     except ClientError as e:
         if e.response['Error']['Code'] == 'InvalidGroup.Duplicate':
-            logger.debug("SG exists - Skipping")
-            pass
-    return "INST_LINUX"
+            logger.debug("SG exist")
+            response = aws_client(resource=False).describe_security_groups(
+                Filters=[
+                    dict(Name='group-name', Values=["INST_LINUX"])
+                ]
+            )
+            return response['SecurityGroups'][0]['GroupId']
+    return
 
 def keypair():
     keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
@@ -86,17 +98,9 @@ def keypair():
     INST_KEYPAIR.close()
     return session_id
 
-def get_spot_info(spotid):
-    client = aws_client(resource=False)
-    spot_status = client.describe_spot_instance_requests(SpotInstanceRequestIds=[spotid])
-    return spot_status["SpotInstanceRequests"][0]
-
-def get_spot_price(type):
-    client = aws_client(resource=False)
-    return client.describe_spot_price_history(InstanceTypes=[type],MaxResults=1,ProductDescriptions=['Linux/UNIX (Amazon VPC)'])["SpotPriceHistory"][0]["SpotPrice"]
-
 def start_instance(spot=False):
     if spot:
+        create_security_group()
         client = aws_client(resource=False)
         LaunchSpecifications = {
             "ImageId": INSTANCE_AMI,
@@ -104,7 +108,7 @@ def start_instance(spot=False):
             "KeyName": keypair(),
             "UserData": base64.b64encode(USERDATA.encode("ascii")).\
                 decode('ascii'),
-            "SecurityGroupIds": ["sg-b247c9ca"],
+            "SecurityGroupIds": [create_security_group()],
             "Placement": {"AvailabilityZone": ""}
         }
         spot_instance = client.request_spot_instances(
