@@ -164,26 +164,20 @@ def inst(ssh, spot, verbose):
     # TODO: Handle error when instance creation failed.
     if verbose:
         logger.setLevel(logging.DEBUG)
-    if ssh:
-        if spot:
-            ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
-                                    'StrictHostKeychecking=no',
-                                    'ubuntu@{}'.format(start_instance(spot=True))],
-                                stderr=subprocess.PIPE)
-            if "Operation timed out" in ssh.stderr.readlines()[0]:
-                logging.warning("Could not connect to Instance")
-        else:
-            ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
-                                    'StrictHostKeychecking=no',
-                                    'ubuntu@{}'.format(start_instance())],
-                                stderr=subprocess.PIPE)
-            if "Operation timed out" in ssh.stderr.readlines()[0]:
-                logging.warning("Could not connect to Instance")
+
+    if spot:
+        instance_address = start_instance(spot=True)
     else:
-        if spot:
-            instance_address = start_instance(spot=True)
-        else:
-            instance_address = start_instance()
+        instance_address = start_instance()
+
+    if ssh:
+        ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
+                                'StrictHostKeychecking=no',
+                                'ubuntu@{}'.format(instance_address)],
+                                stderr=subprocess.PIPE)
+        if "Operation timed out" in ssh.stderr.readlines()[0]:
+            logging.warning("Could not connect to Instance")
+    else:
         print "To connect to your instance:"
         print "ssh -i {} ubuntu@{}".format(KEYPAIR_PATH, instance_address)
         
