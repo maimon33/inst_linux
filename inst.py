@@ -75,7 +75,7 @@ def check_spot_status(client, SpotId):
             client.cancel_spot_instance_requests(SpotInstanceRequestIds=[SpotId])
             sys.exit(0)
 
-def create_security_group():
+def create_security_group(spot=False):
     try:
         My_SecurityGroup = aws_client().create_security_group(
             GroupName="INST_LINUX", Description='Single serving SG')
@@ -89,8 +89,11 @@ def create_security_group():
                     dict(Name='group-name', Values=["INST_LINUX"])
                 ]
             )
-            return response['SecurityGroups'][0]['GroupId']
-    return
+            groupId =  response['SecurityGroups'][0]['GroupId']
+    if spot:
+        return groupId
+    else:
+        return "INST_LINUX"
 
 def keypair():
     keypair = aws_client(resource=False).create_key_pair(KeyName=session_id)
@@ -100,7 +103,6 @@ def keypair():
 
 def start_instance(spot=False):
     if spot:
-        create_security_group()
         client = aws_client(resource=False)
         LaunchSpecifications = {
             "ImageId": INSTANCE_AMI,
@@ -108,7 +110,7 @@ def start_instance(spot=False):
             "KeyName": keypair(),
             "UserData": base64.b64encode(USERDATA.encode("ascii")).\
                 decode('ascii'),
-            "SecurityGroupIds": [create_security_group()],
+            "SecurityGroupIds": [create_security_group(spot=True)],
             "Placement": {"AvailabilityZone": ""}
         }
         spot_instance = client.request_spot_instances(
