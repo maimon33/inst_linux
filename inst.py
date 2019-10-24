@@ -1,6 +1,7 @@
 import os
 import sys
 import uuid
+import time
 import base64
 import logging
 import tempfile
@@ -10,14 +11,15 @@ import boto3
 import click
 
 from requests import get
+from colorlog import ColoredFormatter
 from botocore.exceptions import ClientError, NoRegionError
 
 
 session_id = uuid.uuid4().hex
+MY_IP = get('https://api.ipify.org').text
 DEFAULT_INSTANCE_TYPE = "t2.micro"
 DEFAULT_REGION = 'eu-west-1'
 INSTANCE_AMI = 'ami-a8d2d7ce'
-MY_IP = get('https://api.ipify.org').text
 
 # Keypair prepiration
 INST_KEYPAIR = open('{}/{}'.format(tempfile.gettempdir(), session_id), 'w+')
@@ -35,10 +37,38 @@ crontab /root/mycron
 echo export TMOUT=300 >> /etc/environment"""
 
 # Setting up a logger
-logger = logging.getLogger('inst')
-logger.setLevel(logging.INFO)
-console = logging.StreamHandler()
-logger.addHandler(console)
+def setup_logger(verbose=False):
+    """Return a logger with a default ColoredFormatter."""
+    logging.addLevelName(21, 'SUCCESS')
+    logging.addLevelName(22, 'PROCESS')
+    formatter = ColoredFormatter(
+        "%(log_color)s%(levelname)-8s%(reset)s - %(name)-5s -  %(message)s",
+        datefmt=None,
+        reset=True,
+        log_colors={
+            'ERROR':    'red',
+            'CRITICAL': 'red',
+            'INFO':     'cyan',
+            'DEBUG':    'white',
+            'SUCCESS':  'green',
+            'PROCESS':  'purple',
+            'WARNING':  'yellow',})
+
+    logger = logging.getLogger('AWS-Inst')
+    setattr(logger, 'success', lambda *args: logger.log(21, *args))
+    setattr(logger, 'process', lambda *args: logger.log(22, *args))
+    fh = logging.FileHandler('AWS-Inst.log')
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(formatter)
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(fh)
+    logger.addHandler(handler)
+    if not verbose:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.DEBUG)
+    return logger
 
 
 def aws_client(resource=True, aws_service='ec2'):
@@ -60,22 +90,21 @@ def get_spot_price(type):
     client = aws_client(resource=False)
     return client.describe_spot_price_history(InstanceTypes=[type],MaxResults=1,ProductDescriptions=['Linux/UNIX (Amazon VPC)'])["SpotPriceHistory"][0]["SpotPrice"]        
         
-def check_spot_status(client, SpotId):
+def check_spot_status(client, SpotId, logger):
     status_code = get_spot_info(SpotId)["Status"]["Code"]
     while status_code != "fulfilled":
         status_code = get_spot_info(SpotId)["Status"]["Code"]
         status_msg = get_spot_info(SpotId)["Status"]["Message"]
         if status_code == 'capacity-not-available' or status_code == 'pending-fulfillment' or status_code == 'fulfilled':
-            sys.stdout.write('\x1b[1A')
-            sys.stdout.write('\x1b[2K')
-            print('{0}...'.format(status_code))
+            logger.info('{0}...'.format(status_code))
+            time.sleep(1)
         else:
-            print("{0}\n{1}".format(status_code, status_msg))
-            print("cancel spot request- {0}".format(SpotId))
+            logger.error("{0}\n{1}".format(status_code, status_msg))
+            logger.error("cancel spot request- {0}".format(SpotId))
             client.cancel_spot_instance_requests(SpotInstanceRequestIds=[SpotId])
             sys.exit(0)
 
-def create_security_group(spot=False):
+def create_security_group(logger, spot=False):
     try:
         My_SecurityGroup = aws_client().create_security_group(
             GroupName="INST_LINUX", Description='Single serving SG')
@@ -101,7 +130,7 @@ def keypair():
     INST_KEYPAIR.close()
     return session_id
 
-def start_instance(spot=False):
+def start_instance(logger, spot=False):
     if spot:
         client = aws_client(resource=False)
         LaunchSpecifications = {
@@ -110,7 +139,8 @@ def start_instance(spot=False):
             "KeyName": keypair(),
             "UserData": base64.b64encode(USERDATA.encode("ascii")).\
                 decode('ascii'),
-            "SecurityGroupIds": [create_security_group(spot=True)],
+            "SecurityGroupIds": [create_security_group(logger, spot=True)],
+            ""
             "Placement": {"AvailabilityZone": ""}
         }
         spot_instance = client.request_spot_instances(
@@ -118,6 +148,8 @@ def start_instance(spot=False):
             Type="one-time",
             InstanceCount=1,
             LaunchSpecification=LaunchSpecifications)
+        print dir(spot_instance)
+        # spot_instance.create_tags(Tags=[{'Key': 'Name', 'Value': 'inst-assi'}])
         SpotId = spot_instance["SpotInstanceRequests"][0]["SpotInstanceRequestId"]
     else:
         client = aws_client()
@@ -128,17 +160,19 @@ def start_instance(spot=False):
             InstanceType=DEFAULT_INSTANCE_TYPE,
             KeyName=keypair(),
             UserData=USERDATA,
-            SecurityGroups=[create_security_group()],
+            SecurityGroups=[create_security_group(logger)],
             InstanceInitiatedShutdownBehavior='terminate')[0]
     
     if not spot:
         logger.info('Waiting for instance to boot...')
     else:
-        check_spot_status(client, SpotId)
+        check_spot_status(client, SpotId, logger)
+        aws_client(resource=False).create_tags(Resources=[SpotId], Tags=[{'Key': 'Name', 'Value': 'inst-assi'}])
         instance = aws_client().Instance(id=get_spot_info(SpotId)["InstanceId"])
     
     instance.wait_until_running()
     instance.load()
+    instance.create_tags(Tags=[{'Key': 'Name', 'Value': 'inst-assi'}])
     return instance.public_dns_name
 
 
@@ -163,14 +197,15 @@ CLICK_CONTEXT_SETTINGS = dict(
 def inst(ssh, spot, verbose):
     """Get a Linux distro instance on AWS with one click
     """
-    # TODO: Handle error when instance creation failed.
-    if verbose:
-        logger.setLevel(logging.DEBUG)
+
+    logger = setup_logger(verbose=verbose)
 
     if spot:
-        instance_address = start_instance(spot=True)
+        logger.info('starting spot instance...')
+        instance_address = start_instance(logger, spot=True)
     else:
-        instance_address = start_instance()
+        logger.info('starting on-demand instance...')
+        instance_address = start_instance(logger)
 
     if ssh:
         ssh = subprocess.Popen(['ssh', '-i', KEYPAIR_PATH, '-o',
