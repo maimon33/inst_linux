@@ -29,7 +29,7 @@ setup(
         ],
     },
     install_requires=[
-        'boto3==1.4.4',
+        'boto3==1.10.2',
         'click==6.7',
         'colorlog',
     ]
