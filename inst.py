@@ -2,6 +2,7 @@ import os
 import sys
 import uuid
 import time
+import json
 import base64
 import logging
 import tempfile
@@ -12,12 +13,14 @@ import click
 
 from requests import get
 from colorlog import ColoredFormatter
+from pkg_resources import resource_filename
 from botocore.exceptions import ClientError, NoRegionError
 
 
 session_id = uuid.uuid4().hex
 MY_IP = get('https://api.ipify.org').text
 DEFAULT_INSTANCE_TYPE = "t2.micro"
+# DEFAULT_INSTANCE_TYPE = "c5.4xlarge"
 DEFAULT_REGION = 'eu-west-1'
 INSTANCE_AMI = 'ami-a8d2d7ce'
 
@@ -70,17 +73,49 @@ def setup_logger(verbose=False):
         logger.setLevel(logging.DEBUG)
     return logger
 
+def timer(sec):
+    for i in tqdm(list(range(1, sec))):
+        time.sleep(1)
 
-def aws_client(resource=True, aws_service='ec2'):
+def aws_client(resource=True, aws_service="ec2", region=DEFAULT_REGION):
     try:
         if resource:
-            return boto3.resource(aws_service)
+            return boto3.resource(aws_service, region)
         else:
-            return boto3.client(aws_service)
+            return boto3.client(aws_service, region)
     except NoRegionError as e:
         logger.warning("Error reading 'Default Region'. Make sure boto is configured")
         sys.exit()
 
+def get_region_name(region_code):
+    default_region = 'EU (Ireland)'
+    endpoint_file = resource_filename('botocore', 'data/endpoints.json')
+    try:
+        with open(endpoint_file, 'r') as f:
+            data = json.load(f)
+        return data['partitions'][0]['regions'][region_code]['description']
+    except IOError:
+        return default_region
+
+# Get current AWS price for an on-demand instance
+def get_price(region, instance, os):
+    FLT = '[{{"Field": "tenancy", "Value": "shared", "Type": "TERM_MATCH"}},'\
+      '{{"Field": "operatingSystem", "Value": "{o}", "Type": "TERM_MATCH"}},'\
+      '{{"Field": "preInstalledSw", "Value": "NA", "Type": "TERM_MATCH"}},'\
+      '{{"Field": "instanceType", "Value": "{t}", "Type": "TERM_MATCH"}},'\
+      '{{"Field": "location", "Value": "{r}", "Type": "TERM_MATCH"}}]'
+
+    f = FLT.format(r=region, t=instance, o=os)
+    data = aws_client(
+        resource=False, 
+        aws_service='pricing', 
+        region='us-east-1').get_products(
+            ServiceCode='AmazonEC2', Filters=json.loads(f))
+    od = json.loads(data['PriceList'][0])['terms']['OnDemand']
+    id1 = list(od)[0]
+    id2 = list(od[id1]['priceDimensions'])[0]
+    return od[id1]['priceDimensions'][id2]['pricePerUnit']['USD']
+    
 def get_spot_info(spotid):
     client = aws_client(resource=False)
     spot_status = client.describe_spot_instance_requests(SpotInstanceRequestIds=[spotid])
@@ -88,7 +123,9 @@ def get_spot_info(spotid):
 
 def get_spot_price(type):
     client = aws_client(resource=False)
-    return client.describe_spot_price_history(InstanceTypes=[type],MaxResults=1,ProductDescriptions=['Linux/UNIX (Amazon VPC)'])["SpotPriceHistory"][0]["SpotPrice"]        
+    return client.describe_spot_price_history(InstanceTypes=[type],
+                                              MaxResults=1,
+                                              ProductDescriptions=['Linux/UNIX (Amazon VPC)'])["SpotPriceHistory"][0]["SpotPrice"]        
         
 def check_spot_status(client, SpotId, logger):
     status_code = get_spot_info(SpotId)["Status"]["Code"]
@@ -143,13 +180,12 @@ def start_instance(logger, spot=False):
             ""
             "Placement": {"AvailabilityZone": ""}
         }
+        spot_offer_price = get_spot_price(DEFAULT_INSTANCE_TYPE)
         spot_instance = client.request_spot_instances(
-            SpotPrice=get_spot_price(DEFAULT_INSTANCE_TYPE),
+            SpotPrice=spot_offer_price,
             Type="one-time",
             InstanceCount=1,
             LaunchSpecification=LaunchSpecifications)
-        print dir(spot_instance)
-        # spot_instance.create_tags(Tags=[{'Key': 'Name', 'Value': 'inst-assi'}])
         SpotId = spot_instance["SpotInstanceRequests"][0]["SpotInstanceRequestId"]
     else:
         client = aws_client()
@@ -164,8 +200,11 @@ def start_instance(logger, spot=False):
             InstanceInitiatedShutdownBehavior='terminate')[0]
     
     if not spot:
+        instance_cost = get_price(get_region_name(DEFAULT_REGION), DEFAULT_INSTANCE_TYPE, 'Linux')
+        logger.info("On demand instance will cost ${} per hour".format(instance_cost))
         logger.info('Waiting for instance to boot...')
     else:
+        logger.info("Spot instance will cost ${} per hour".format(spot_offer_price))
         check_spot_status(client, SpotId, logger)
         aws_client(resource=False).create_tags(Resources=[SpotId], Tags=[{'Key': 'Name', 'Value': 'inst-assi'}])
         instance = aws_client().Instance(id=get_spot_info(SpotId)["InstanceId"])
@@ -173,6 +212,7 @@ def start_instance(logger, spot=False):
     instance.wait_until_running()
     instance.load()
     instance.create_tags(Tags=[{'Key': 'Name', 'Value': 'inst-assi'}])
+    
     return instance.public_dns_name
 
 
